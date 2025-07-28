@@ -15,7 +15,7 @@ load_dotenv()
 # Inicializar la app FastAPI
 app = FastAPI()
 
-# Permitir llamadas desde el frontend local (ajustar en prod si hace falta)
+# Permitir llamadas desde el frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "https://ro-lorenzo-nutricionista.onrender.com"],
@@ -27,10 +27,10 @@ app.add_middleware(
 # Inicializar el SDK de Mercado Pago
 sdk = mercadopago.SDK(os.getenv("MP_ACCESS_TOKEN"))
 
-# Leer FRONT_URL desde .env (fallback a localhost)
+# Leer FRONT_URL desde .env
 FRONT_URL = os.getenv("FRONT_URL", "http://localhost:3000")
 
-# Definir el modelo de entrada (turno)
+# Modelo del turno
 class TurnoRequest(BaseModel):
     nombre: str
     apellido: str
@@ -42,7 +42,7 @@ class TurnoRequest(BaseModel):
     costo: float
     ubicacion: str
 
-# Endpoint para crear preferencia de pago
+# Crear preferencia de pago
 @app.post("/crear-preferencia")
 def crear_preferencia(turno: TurnoRequest):
     print("\n--- [INFO] Endpoint /crear-preferencia alcanzado. ---")
@@ -97,7 +97,7 @@ def crear_preferencia(turno: TurnoRequest):
             }
         ],
         "external_reference": turno_id,
-        "notification_url": "https://tu-backend.com/webhook",  # opcional, aún no lo usás
+        "notification_url": "https://tu-backend.com/webhook",  # aún no implementado
         "back_urls": {
             "success": f"{FRONT_URL}/gracias?{query_string}",
             "failure": f"{FRONT_URL}/error",
@@ -120,7 +120,7 @@ def crear_preferencia(turno: TurnoRequest):
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
         raise HTTPException(status_code=500, detail="Error al crear preferencia de pago en Mercado Pago.")
 
-# Endpoint para obtener los turnos ocupados
+# Endpoint para turnos ocupados
 @app.get("/turnos-ocupados")
 def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
     try:
@@ -136,3 +136,9 @@ def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
     ]
 
     return horarios_ocupados
+
+# 🟩 BLOQUE CLAVE PARA RENDER
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))  # Render asigna PORT en runtime
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
