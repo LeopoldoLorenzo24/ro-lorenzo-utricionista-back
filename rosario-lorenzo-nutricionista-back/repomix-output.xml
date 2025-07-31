@@ -40,6 +40,7 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+.gitignore
 main.py
 turnos.json
 </directory_structure>
@@ -47,8 +48,26 @@ turnos.json
 <files>
 This section contains the contents of the repository's files.
 
+<file path=".gitignore">
+# Ignorar el archivo de variables sensibles
+.env
+
+# Ignorar entorno virtual
+venv/
+.venv/
+
+# Ignorar archivos temporales y de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de configuración del editor
+.vscode/
+</file>
+
 <file path="main.py">
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import mercadopago
@@ -65,10 +84,10 @@ load_dotenv()
 # Inicializar la app FastAPI
 app = FastAPI()
 
-# Permitir llamadas desde el frontend local
+# Permitir llamadas desde el frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "https://ro-lorenzo-nutricionista.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -77,7 +96,10 @@ app.add_middleware(
 # Inicializar el SDK de Mercado Pago
 sdk = mercadopago.SDK(os.getenv("MP_ACCESS_TOKEN"))
 
-# Definir el modelo de entrada (turno)
+# Leer FRONT_URL desde .env
+FRONT_URL = os.getenv("FRONT_URL", "http://localhost:3000")
+
+# Modelo del turno
 class TurnoRequest(BaseModel):
     nombre: str
     apellido: str
@@ -89,20 +111,17 @@ class TurnoRequest(BaseModel):
     costo: float
     ubicacion: str
 
-# Endpoint para crear preferencia de pago
+# Crear preferencia de pago
 @app.post("/crear-preferencia")
 def crear_preferencia(turno: TurnoRequest):
-    # --- DIAGNÓSTICO 1: Verificar que la petición llega al endpoint ---
     print("\n--- [INFO] Endpoint /crear-preferencia alcanzado. ---")
 
-    # Cargar turnos existentes
     try:
         with open("turnos.json", "r", encoding="utf-8") as f:
             turnos = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         turnos = []
 
-    # Crear y guardar los datos del turno en el archivo JSON
     turno_id = str(uuid.uuid4())
     token_cancelacion = str(uuid.uuid4())
     turno_data = {
@@ -124,9 +143,8 @@ def crear_preferencia(turno: TurnoRequest):
         turnos.append(turno_data)
         json.dump(turnos, f, indent=2, ensure_ascii=False)
 
-    # --- DIAGNÓSTICO 2: Confirmar que los datos locales se procesaron ---
     print("[INFO] Turno guardado localmente. Preparando datos para Mercado Pago...")
-    
+
     params_para_url = {
         "nombre": turno.nombre,
         "apellido": turno.apellido,
@@ -137,7 +155,7 @@ def crear_preferencia(turno: TurnoRequest):
         "ubicacion": turno.ubicacion,
     }
     query_string = urllib.parse.urlencode(params_para_url)
-    
+
     preference_data = {
         "items": [
             {
@@ -148,33 +166,51 @@ def crear_preferencia(turno: TurnoRequest):
             }
         ],
         "external_reference": turno_id,
-        "notification_url": "https://tu-backend.com/webhook",
+        "notification_url": "https://tu-backend.com/webhook",  # aún no implementado
         "back_urls": {
-            "success": f"http://localhost:3000/gracias?{query_string}",
-            "failure": "http://localhost:3000/error",
-            "pending": "http://localhost:3000/pending"
+            "success": f"{FRONT_URL}/gracias?{query_string}",
+            "failure": f"{FRONT_URL}/error",
+            "pending": f"{FRONT_URL}/pending"
         },
+        "auto_return": "approved"
     }
 
     try:
-        # --- DIAGNÓSTICO 3: El punto crítico. Veremos si el programa pasa de aquí. ---
-        print("[INFO] Enviando solicitud a la API de Mercado Pago... (Si se cuelga aquí, el problema es el token o la conexión con MP)")
-        
+        print("[INFO] Enviando solicitud a la API de Mercado Pago...")
         preference_response = sdk.preference().create(preference_data)
-        
-        # --- DIAGNÓSTICO 4: Si ves este mensaje, la comunicación con MP fue exitosa. ---
         print("[SUCCESS] Respuesta recibida de Mercado Pago:")
-        print(preference_response) # Imprime la respuesta completa para analizarla.
-        
+        print(preference_response)
         init_point = preference_response["response"]["init_point"]
         return {"pago_url": init_point}
 
     except Exception as e:
-        # --- DIAGNÓSTICO 5: Si ves esto, MP devolvió un error que podemos leer. ---
         print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print(f"!!! [ERROR] Ocurrió una excepción al llamar a Mercado Pago: {e}")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
         raise HTTPException(status_code=500, detail="Error al crear preferencia de pago en Mercado Pago.")
+
+# Endpoint para turnos ocupados
+@app.get("/turnos-ocupados")
+def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
+    try:
+        with open("turnos.json", "r", encoding="utf-8") as f:
+            turnos = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        turnos = []
+
+    horarios_ocupados = [
+        turno["hora"]
+        for turno in turnos
+        if turno["modalidad"] == modalidad and turno["fecha"] == fecha and turno["estado"] in ["pendiente_de_pago", "confirmado"]
+    ]
+
+    return horarios_ocupados
+
+# 🟩 BLOQUE CLAVE PARA RENDER
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))  # Render asigna PORT en runtime
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
 </file>
 
 <file path="turnos.json">
@@ -448,6 +484,66 @@ def crear_preferencia(turno: TurnoRequest):
     "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
     "token_cancelacion": "26a41b4b-ca54-4321-820a-2fb8245e6245",
     "fecha_creacion": "2025-07-28T15:59:24.275402"
+  },
+  {
+    "id": "ef860a4d-f942-4613-bd18-39e58f174bee",
+    "estado": "pendiente_de_pago",
+    "nombre": "Leopoldo",
+    "apellido": "Lorenzo",
+    "motivo": "Antropometría",
+    "modalidad": "presencial",
+    "fecha": "2025-07-29",
+    "hora": "18:00",
+    "duracion": "15 minutos",
+    "costo": 100.0,
+    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
+    "token_cancelacion": "0aed7b2b-10ae-428a-9b59-a7b7222e6503",
+    "fecha_creacion": "2025-07-28T17:05:05.730637"
+  },
+  {
+    "id": "92da0bfd-7885-40dd-bf15-bac375288b46",
+    "estado": "pendiente_de_pago",
+    "nombre": "Leopoldo",
+    "apellido": "Lorenzo",
+    "motivo": "Antropometría",
+    "modalidad": "presencial",
+    "fecha": "2025-07-29",
+    "hora": "19:00",
+    "duracion": "15 minutos",
+    "costo": 100.0,
+    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
+    "token_cancelacion": "cb1985a0-ad14-46cf-b19a-d8199944349e",
+    "fecha_creacion": "2025-07-28T17:17:51.918739"
+  },
+  {
+    "id": "e2799566-55c9-4e3f-848b-8c07d5b345d8",
+    "estado": "pendiente_de_pago",
+    "nombre": "Leopoldo ",
+    "apellido": "Lorenzo",
+    "motivo": "Antropometría",
+    "modalidad": "presencial",
+    "fecha": "2025-07-29",
+    "hora": "18:00",
+    "duracion": "15 minutos",
+    "costo": 100.0,
+    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
+    "token_cancelacion": "154d47a9-1db0-42ef-a990-076f5cf0bdb9",
+    "fecha_creacion": "2025-07-28T17:29:06.903033"
+  },
+  {
+    "id": "02a8180f-9890-48b7-a76c-08b651e1d03e",
+    "estado": "pendiente_de_pago",
+    "nombre": "Leopoldo",
+    "apellido": "Lorenzo",
+    "motivo": "Antropometría",
+    "modalidad": "presencial",
+    "fecha": "2025-07-29",
+    "hora": "20:00",
+    "duracion": "15 minutos",
+    "costo": 10.0,
+    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
+    "token_cancelacion": "97ac9033-511b-422a-aea6-95e0e3cc4c06",
+    "fecha_creacion": "2025-07-28T18:07:22.176574"
   }
 ]
 </file>
