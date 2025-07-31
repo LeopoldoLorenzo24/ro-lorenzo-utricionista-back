@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import urllib.parse
+from typing import Optional 
 
 load_dotenv()
 
@@ -198,6 +199,27 @@ def cancelar_turno(id: str):
         print(f"[ERROR] No se pudo cancelar el turno: {e}")
         raise HTTPException(500, "No se pudo cancelar el turno")
 
+@app.get("/ver-turnos")
+def ver_turnos(estado: Optional[str] = Query(None)):
+    """
+    Devuelve todos los turnos.
+    Si se pasa ?estado=confirmado o ?estado=pendiente_de_pago, los filtra.
+    """
+    try:
+        with open("turnos.json", "r", encoding="utf-8") as f:
+            turnos = json.load(f)
+
+        # Aplicar limpieza de vencidos
+        turnos = limpiar_turnos_vencidos(turnos)
+
+        if estado:
+            turnos = [t for t in turnos if t["estado"] == estado]
+
+        return {"turnos": turnos}
+
+    except Exception as e:
+        print(f"[ERROR] No se pudieron leer los turnos: {e}")
+        raise HTTPException(status_code=500, detail="No se pudieron leer los turnos")
 
 if __name__ == "__main__":
     import uvicorn
