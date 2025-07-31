@@ -9,13 +9,10 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import urllib.parse
 
-# Cargar variables de entorno (.env)
 load_dotenv()
 
-# Inicializar la app FastAPI
 app = FastAPI()
 
-# Permitir llamadas desde el frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://ro-lorenzo-nutricionista.onrender.com"],
@@ -24,10 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializar el SDK de Mercado Pago
 sdk = mercadopago.SDK(os.getenv("MP_ACCESS_TOKEN"))
-
-# Leer URLs desde .env o usar por defecto las URL desplegadas
 FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista.onrender.com")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://ro-lorenzo-nutricionista-back.onrender.com/webhook")
 
@@ -38,7 +32,7 @@ def limpiar_turnos_vencidos(turnos):
     for turno in turnos:
         if turno["estado"] == "pendiente_de_pago":
             fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])
-            if ahora - fecha_creacion < timedelta(minutes=1):  # ahora 12h para pagos en efectivo
+            if ahora - fecha_creacion < timedelta(minutes=1):  # Para pruebas, luego cambiar a hours=12
                 filtrados.append(turno)
         else:
             filtrados.append(turno)
@@ -92,11 +86,6 @@ def crear_preferencia(turno: TurnoRequest):
     with open("turnos.json", "w", encoding="utf-8") as f:
         json.dump(turnos, f, indent=2, ensure_ascii=False)
 
-    print("[INFO] Turno guardado. Preparando preferencia...")
-
-    if not FRONT_URL or not FRONT_URL.startswith("http"):
-        raise HTTPException(status_code=500, detail="FRONT_URL no está definido correctamente.")
-
     query_string = urllib.parse.urlencode({
         "nombre": turno.nombre,
         "apellido": turno.apellido,
@@ -119,7 +108,7 @@ def crear_preferencia(turno: TurnoRequest):
         "external_reference": turno_id,
         "notification_url": WEBHOOK_URL,
         "payment_methods": {
-            "excluded_payment_types": [{"id": "atm"}],
+            "excluded_payment_types": [{"id": "atm"}],  # ⚠️ ticket (efectivo) está PERMITIDO
             "installments": 1
         },
         "back_urls": {
@@ -131,16 +120,11 @@ def crear_preferencia(turno: TurnoRequest):
     }
 
     try:
-        print("[INFO] Enviando solicitud a la API de Mercado Pago...")
         preference_response = sdk.preference().create(preference_data)
-        print("[SUCCESS] Preferencia creada:", preference_response)
-
         if "init_point" not in preference_response["response"]:
             raise ValueError("init_point no recibido de Mercado Pago")
-
         init_point = preference_response["response"]["init_point"]
         return {"pago_url": init_point}
-
     except Exception as e:
         print("[ERROR] al crear preferencia:", e)
         raise HTTPException(status_code=500, detail="Error al crear preferencia de pago.")
@@ -150,8 +134,6 @@ def crear_preferencia(turno: TurnoRequest):
 async def recibir_webhook(request: Request):
     try:
         body = await request.json()
-        print("[INFO] Webhook recibido:", body)
-
         if body.get("type") != "payment":
             return {"status": "ignorado"}
 
@@ -173,7 +155,6 @@ async def recibir_webhook(request: Request):
                 f.seek(0)
                 json.dump(turnos, f, indent=2, ensure_ascii=False)
                 f.truncate()
-            print(f"[INFO] Turno {external_reference} marcado como confirmado.")
         return {"status": "ok"}
 
     except Exception as e:
@@ -190,13 +171,16 @@ def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
         turnos = []
 
     turnos = limpiar_turnos_vencidos(turnos)
+
     with open("turnos.json", "w", encoding="utf-8") as f:
         json.dump(turnos, f, indent=2, ensure_ascii=False)
 
     horarios_ocupados = [
         turno["hora"]
         for turno in turnos
-        if turno["modalidad"].lower() == modalidad.lower() and turno["fecha"] == fecha and turno["estado"] == "confirmado"
+        if turno["modalidad"].lower() == modalidad.lower()
+        and turno["fecha"] == fecha
+        and turno["estado"] == "confirmado"
     ]
     return horarios_ocupados
 
@@ -209,7 +193,6 @@ def cancelar_turno(id: str):
         nuevos_turnos = [t for t in turnos if t["id"] != id]
         with open("turnos.json", "w", encoding="utf-8") as f:
             json.dump(nuevos_turnos, f, indent=2, ensure_ascii=False)
-        print(f"[INFO] Turno cancelado manualmente: {id}")
         return {"status": "turno cancelado"}
     except Exception as e:
         print(f"[ERROR] No se pudo cancelar el turno: {e}")
