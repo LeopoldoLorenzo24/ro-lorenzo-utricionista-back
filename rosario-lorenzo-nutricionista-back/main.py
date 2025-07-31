@@ -38,7 +38,7 @@ def limpiar_turnos_vencidos(turnos):
     for turno in turnos:
         if turno["estado"] == "pendiente_de_pago":
             fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])
-            if ahora - fecha_creacion < timedelta(minutes=10):
+            if ahora - fecha_creacion < timedelta(hours=12):  # ahora 12h para pagos en efectivo
                 filtrados.append(turno)
         else:
             filtrados.append(turno)
@@ -118,6 +118,10 @@ def crear_preferencia(turno: TurnoRequest):
         ],
         "external_reference": turno_id,
         "notification_url": WEBHOOK_URL,
+        "payment_methods": {
+            "excluded_payment_types": [{"id": "atm"}],
+            "installments": 1
+        },
         "back_urls": {
             "success": f"{FRONT_URL}/gracias?{query_string}",
             "failure": f"{FRONT_URL}/error?id={turno_id}",

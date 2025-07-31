@@ -67,14 +67,14 @@ __pycache__/
 </file>
 
 <file path="main.py">
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import mercadopago
 import os
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import urllib.parse
 
@@ -87,7 +87,7 @@ app = FastAPI()
 # Permitir llamadas desde el frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://ro-lorenzo-nutricionista.onrender.com"],
+    allow_origins=["https://ro-lorenzo-nutricionista.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,10 +96,24 @@ app.add_middleware(
 # Inicializar el SDK de Mercado Pago
 sdk = mercadopago.SDK(os.getenv("MP_ACCESS_TOKEN"))
 
-# Leer FRONT_URL desde .env
-FRONT_URL = os.getenv("FRONT_URL", "http://localhost:3000")
+# Leer URLs desde .env o usar por defecto las URL desplegadas
+FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista.onrender.com")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://ro-lorenzo-nutricionista-back.onrender.com/webhook")
 
-# Modelo del turno
+
+def limpiar_turnos_vencidos(turnos):
+    ahora = datetime.now()
+    filtrados = []
+    for turno in turnos:
+        if turno["estado"] == "pendiente_de_pago":
+            fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])
+            if ahora - fecha_creacion < timedelta(minutes=10):
+                filtrados.append(turno)
+        else:
+            filtrados.append(turno)
+    return filtrados
+
+
 class TurnoRequest(BaseModel):
     nombre: str
     apellido: str
@@ -111,7 +125,7 @@ class TurnoRequest(BaseModel):
     costo: float
     ubicacion: str
 
-# Crear preferencia de pago
+
 @app.post("/crear-preferencia")
 def crear_preferencia(turno: TurnoRequest):
     print("\n--- [INFO] Endpoint /crear-preferencia alcanzado. ---")
@@ -122,8 +136,11 @@ def crear_preferencia(turno: TurnoRequest):
     except (FileNotFoundError, json.JSONDecodeError):
         turnos = []
 
+    turnos = limpiar_turnos_vencidos(turnos)
+
     turno_id = str(uuid.uuid4())
     token_cancelacion = str(uuid.uuid4())
+
     turno_data = {
         "id": turno_id,
         "estado": "pendiente_de_pago",
@@ -139,13 +156,17 @@ def crear_preferencia(turno: TurnoRequest):
         "token_cancelacion": token_cancelacion,
         "fecha_creacion": datetime.now().isoformat()
     }
+
+    turnos.append(turno_data)
     with open("turnos.json", "w", encoding="utf-8") as f:
-        turnos.append(turno_data)
         json.dump(turnos, f, indent=2, ensure_ascii=False)
 
-    print("[INFO] Turno guardado localmente. Preparando datos para Mercado Pago...")
+    print("[INFO] Turno guardado. Preparando preferencia...")
 
-    params_para_url = {
+    if not FRONT_URL or not FRONT_URL.startswith("http"):
+        raise HTTPException(status_code=500, detail="FRONT_URL no está definido correctamente.")
+
+    query_string = urllib.parse.urlencode({
         "nombre": turno.nombre,
         "apellido": turno.apellido,
         "motivo": turno.motivo,
@@ -153,8 +174,7 @@ def crear_preferencia(turno: TurnoRequest):
         "fecha": turno.fecha,
         "hora": turno.hora,
         "ubicacion": turno.ubicacion,
-    }
-    query_string = urllib.parse.urlencode(params_para_url)
+    })
 
     preference_data = {
         "items": [
@@ -166,10 +186,10 @@ def crear_preferencia(turno: TurnoRequest):
             }
         ],
         "external_reference": turno_id,
-        "notification_url": "https://tu-backend.com/webhook",  # aún no implementado
+        "notification_url": WEBHOOK_URL,
         "back_urls": {
             "success": f"{FRONT_URL}/gracias?{query_string}",
-            "failure": f"{FRONT_URL}/error",
+            "failure": f"{FRONT_URL}/error?id={turno_id}",
             "pending": f"{FRONT_URL}/pending"
         },
         "auto_return": "approved"
@@ -178,18 +198,54 @@ def crear_preferencia(turno: TurnoRequest):
     try:
         print("[INFO] Enviando solicitud a la API de Mercado Pago...")
         preference_response = sdk.preference().create(preference_data)
-        print("[SUCCESS] Respuesta recibida de Mercado Pago:")
-        print(preference_response)
+        print("[SUCCESS] Preferencia creada:", preference_response)
+
+        if "init_point" not in preference_response["response"]:
+            raise ValueError("init_point no recibido de Mercado Pago")
+
         init_point = preference_response["response"]["init_point"]
         return {"pago_url": init_point}
 
     except Exception as e:
-        print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print(f"!!! [ERROR] Ocurrió una excepción al llamar a Mercado Pago: {e}")
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-        raise HTTPException(status_code=500, detail="Error al crear preferencia de pago en Mercado Pago.")
+        print("[ERROR] al crear preferencia:", e)
+        raise HTTPException(status_code=500, detail="Error al crear preferencia de pago.")
 
-# Endpoint para turnos ocupados
+
+@app.post("/webhook")
+async def recibir_webhook(request: Request):
+    try:
+        body = await request.json()
+        print("[INFO] Webhook recibido:", body)
+
+        if body.get("type") != "payment":
+            return {"status": "ignorado"}
+
+        payment_id = body.get("data", {}).get("id")
+        if not payment_id:
+            return {"status": "sin id de pago"}
+
+        payment_info = sdk.payment().get(payment_id)
+        status = payment_info["response"].get("status")
+        external_reference = payment_info["response"].get("external_reference")
+
+        if status == "approved":
+            with open("turnos.json", "r+", encoding="utf-8") as f:
+                turnos = json.load(f)
+                for turno in turnos:
+                    if turno["id"] == external_reference:
+                        turno["estado"] = "confirmado"
+                        break
+                f.seek(0)
+                json.dump(turnos, f, indent=2, ensure_ascii=False)
+                f.truncate()
+            print(f"[INFO] Turno {external_reference} marcado como confirmado.")
+        return {"status": "ok"}
+
+    except Exception as e:
+        print(f"[ERROR] en webhook: {e}")
+        return {"status": "error"}
+
+
 @app.get("/turnos-ocupados")
 def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
     try:
@@ -198,352 +254,100 @@ def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
     except (FileNotFoundError, json.JSONDecodeError):
         turnos = []
 
+    turnos = limpiar_turnos_vencidos(turnos)
+    with open("turnos.json", "w", encoding="utf-8") as f:
+        json.dump(turnos, f, indent=2, ensure_ascii=False)
+
     horarios_ocupados = [
         turno["hora"]
         for turno in turnos
-        if turno["modalidad"] == modalidad and turno["fecha"] == fecha and turno["estado"] in ["pendiente_de_pago", "confirmado"]
+        if turno["modalidad"].lower() == modalidad.lower() and turno["fecha"] == fecha and turno["estado"] == "confirmado"
     ]
-
     return horarios_ocupados
 
-# 🟩 BLOQUE CLAVE PARA RENDER
+
+@app.delete("/cancelar-turno")
+def cancelar_turno(id: str):
+    try:
+        with open("turnos.json", "r", encoding="utf-8") as f:
+            turnos = json.load(f)
+        nuevos_turnos = [t for t in turnos if t["id"] != id]
+        with open("turnos.json", "w", encoding="utf-8") as f:
+            json.dump(nuevos_turnos, f, indent=2, ensure_ascii=False)
+        print(f"[INFO] Turno cancelado manualmente: {id}")
+        return {"status": "turno cancelado"}
+    except Exception as e:
+        print(f"[ERROR] No se pudo cancelar el turno: {e}")
+        raise HTTPException(500, "No se pudo cancelar el turno")
+
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))  # Render asigna PORT en runtime
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
 </file>
 
 <file path="turnos.json">
 [
   {
-    "id": "91bb8cbf-1771-48fc-b60a-88d4e8817c34",
+    "id": "a492cca9-39a2-4951-8381-4c863528b758",
     "estado": "pendiente_de_pago",
     "nombre": "Leopoldo",
     "apellido": "Lorenzo",
     "motivo": "Antropometría",
-    "modalidad": "presencial",
+    "modalidad": "virtual",
     "fecha": "2025-07-31",
-    "hora": "09:00",
+    "hora": "15:00",
     "duracion": "15 minutos",
-    "costo": 27500,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "41dabd22-0df8-472d-b870-3a4f460929f4",
-    "fecha_creacion": "2025-07-27T13:22:28.656113"
+    "costo": 1.0,
+    "ubicacion": "Online",
+    "token_cancelacion": "b7cfede8-fd46-4af6-9b68-5d01ced25915",
+    "fecha_creacion": "2025-07-31T13:25:46.011213"
   },
   {
-    "id": "cdc5475a-f3f7-4959-a3a3-6f3a090e67d6",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "1c756b0e-3507-42e1-89d4-3591efe7b6f6",
-    "fecha_creacion": "2025-07-27T19:54:42.325735"
-  },
-  {
-    "id": "1bb40bc3-ae28-493b-a152-d978d65eb4cf",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "8cc0e884-bd92-4ad5-99a7-d032ce676c3f",
-    "fecha_creacion": "2025-07-27T19:57:11.064418"
-  },
-  {
-    "id": "09007de5-167e-4d77-adde-ca3632020423",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "c36268fa-be88-4441-9332-41a785fb9cf1",
-    "fecha_creacion": "2025-07-27T20:00:15.585121"
-  },
-  {
-    "id": "f909e0a3-c115-47f8-ab4d-38b6e70bd6b6",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "0a39430b-566a-47fe-a8f3-2eec828b1684",
-    "fecha_creacion": "2025-07-27T20:01:49.844402"
-  },
-  {
-    "id": "ca7bfe08-e720-40f0-a352-2d83bcdf1e82",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "874d9213-2637-4683-aaed-9a04d6b449e3",
-    "fecha_creacion": "2025-07-27T20:04:25.646467"
-  },
-  {
-    "id": "cfae13f6-1881-4aa4-9022-c7b8cd05a30c",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "63847af1-dd36-4ec9-8865-5a7322421ca7",
-    "fecha_creacion": "2025-07-27T20:17:08.687255"
-  },
-  {
-    "id": "4311eeba-32f7-4a9a-b303-d0a8332ef2aa",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "18db27ef-4fe7-4d0a-babe-307b10efe7fa",
-    "fecha_creacion": "2025-07-27T20:19:11.788200"
-  },
-  {
-    "id": "5edbbc82-e1c4-40ac-9b42-532a9da5eb7c",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "fa31db1f-1211-4736-b356-8114be05d370",
-    "fecha_creacion": "2025-07-27T20:20:56.269976"
-  },
-  {
-    "id": "26d93631-5a72-48d7-b3d5-2562b766c405",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "3e7eefb4-8b4b-41d2-9b0e-349608f5271c",
-    "fecha_creacion": "2025-07-28T15:04:46.278782"
-  },
-  {
-    "id": "d7e413b2-a962-450c-bed5-94afd159ca0a",
+    "id": "0a90a092-f40b-41bf-b52a-bd626bc719b3",
     "estado": "pendiente_de_pago",
     "nombre": "Leopoldo",
     "apellido": "Lorenzo",
     "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "19:00",
+    "modalidad": "virtual",
+    "fecha": "2025-07-31",
+    "hora": "15:00",
     "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "54ae5179-1e02-4605-9762-bc96bdcc1590",
-    "fecha_creacion": "2025-07-28T15:25:25.950825"
+    "costo": 1.0,
+    "ubicacion": "Online",
+    "token_cancelacion": "884e6f7f-73fb-4646-9dfe-d2a0b0c987ef",
+    "fecha_creacion": "2025-07-31T13:27:54.194468"
   },
   {
-    "id": "3994783f-4503-4933-8b08-63a98b13c3fe",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "7ad9173a-317b-43a6-aff1-d0a770916d37",
-    "fecha_creacion": "2025-07-28T15:26:47.381544"
-  },
-  {
-    "id": "2de312b4-2f0e-4dcf-bca4-bb07383ad478",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "95caec6b-a244-45f3-a632-38ae5b3783c8",
-    "fecha_creacion": "2025-07-28T15:28:00.064656"
-  },
-  {
-    "id": "1e5d41dc-6832-4459-9784-9a5f0d4f5e44",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "85a81282-c750-4096-8f5c-9ae51481999f",
-    "fecha_creacion": "2025-07-28T15:30:20.939110"
-  },
-  {
-    "id": "04f96cd8-0415-4423-9869-ce3e97731ea0",
+    "id": "7fb5f92e-3659-4760-9bf8-26abbb617a56",
     "estado": "pendiente_de_pago",
     "nombre": "Leopoldo",
     "apellido": "Lorenzo",
     "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "18:00",
+    "modalidad": "virtual",
+    "fecha": "2025-07-31",
+    "hora": "15:00",
     "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "146da835-fec6-4d39-88bb-a3605815e6bd",
-    "fecha_creacion": "2025-07-28T15:30:50.794079"
+    "costo": 1.0,
+    "ubicacion": "Online",
+    "token_cancelacion": "16884f30-17bb-46c0-acc3-827765185b78",
+    "fecha_creacion": "2025-07-31T13:29:53.379266"
   },
   {
-    "id": "8354fb24-99a0-4481-b2ca-9f0c686e3969",
-    "estado": "pendiente_de_pago",
-    "nombre": "Juan",
-    "apellido": "Pérez",
-    "motivo": "1ra Consulta",
-    "modalidad": "Presencial",
-    "fecha": "2025-08-02",
-    "hora": "10:30",
-    "duracion": "45 minutos",
-    "costo": 25000.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "42a5216e-5ad2-4a49-b833-2f25f47c7bbc",
-    "fecha_creacion": "2025-07-28T15:54:51.629411"
-  },
-  {
-    "id": "d5f20480-f390-47bf-8d09-f919694c6424",
+    "id": "c7af2b03-2ead-419d-baff-73d91e98737d",
     "estado": "pendiente_de_pago",
     "nombre": "Leopoldo",
     "apellido": "Lorenzo",
     "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "19:00",
+    "modalidad": "virtual",
+    "fecha": "2025-07-31",
+    "hora": "15:00",
     "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "2b1a65f3-f98f-4ec6-8908-c50254940766",
-    "fecha_creacion": "2025-07-28T15:56:43.090262"
-  },
-  {
-    "id": "1324527e-eb53-4ecd-9ab1-005914b3332c",
-    "estado": "pendiente_de_pago",
-    "nombre": "Leopoldo",
-    "apellido": "Lorenzo",
-    "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "19:00",
-    "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "26a41b4b-ca54-4321-820a-2fb8245e6245",
-    "fecha_creacion": "2025-07-28T15:59:24.275402"
-  },
-  {
-    "id": "ef860a4d-f942-4613-bd18-39e58f174bee",
-    "estado": "pendiente_de_pago",
-    "nombre": "Leopoldo",
-    "apellido": "Lorenzo",
-    "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "18:00",
-    "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "0aed7b2b-10ae-428a-9b59-a7b7222e6503",
-    "fecha_creacion": "2025-07-28T17:05:05.730637"
-  },
-  {
-    "id": "92da0bfd-7885-40dd-bf15-bac375288b46",
-    "estado": "pendiente_de_pago",
-    "nombre": "Leopoldo",
-    "apellido": "Lorenzo",
-    "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "19:00",
-    "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "cb1985a0-ad14-46cf-b19a-d8199944349e",
-    "fecha_creacion": "2025-07-28T17:17:51.918739"
-  },
-  {
-    "id": "e2799566-55c9-4e3f-848b-8c07d5b345d8",
-    "estado": "pendiente_de_pago",
-    "nombre": "Leopoldo ",
-    "apellido": "Lorenzo",
-    "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "18:00",
-    "duracion": "15 minutos",
-    "costo": 100.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "154d47a9-1db0-42ef-a990-076f5cf0bdb9",
-    "fecha_creacion": "2025-07-28T17:29:06.903033"
-  },
-  {
-    "id": "02a8180f-9890-48b7-a76c-08b651e1d03e",
-    "estado": "pendiente_de_pago",
-    "nombre": "Leopoldo",
-    "apellido": "Lorenzo",
-    "motivo": "Antropometría",
-    "modalidad": "presencial",
-    "fecha": "2025-07-29",
-    "hora": "20:00",
-    "duracion": "15 minutos",
-    "costo": 10.0,
-    "ubicacion": "GOOD LIFE CENTER (San Luis 145, Nueva Córdoba)",
-    "token_cancelacion": "97ac9033-511b-422a-aea6-95e0e3cc4c06",
-    "fecha_creacion": "2025-07-28T18:07:22.176574"
+    "costo": 1.0,
+    "ubicacion": "Online",
+    "token_cancelacion": "8127e53a-5634-4a0d-b551-e8e95245f7d0",
+    "fecha_creacion": "2025-07-31T13:33:57.550937"
   }
 ]
 </file>
