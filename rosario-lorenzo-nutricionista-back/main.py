@@ -38,7 +38,7 @@ def limpiar_turnos_vencidos(turnos):
     for turno in turnos:
         if turno["estado"] == "pendiente_de_pago":
             fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])
-            if ahora - fecha_creacion < timedelta(hours=12):  # ahora 12h para pagos en efectivo
+            if ahora - fecha_creacion < timedelta(minutes=1):  # ahora 12h para pagos en efectivo
                 filtrados.append(turno)
         else:
             filtrados.append(turno)
