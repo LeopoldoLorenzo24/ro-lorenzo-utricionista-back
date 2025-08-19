@@ -5,7 +5,7 @@ import mercadopago
 import os
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import urllib.parse
 from typing import Optional 
@@ -16,7 +16,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://ro-lorenzo-nutricionista.onrender.com"],
+    allow_origins=["*"],   # permite cualquier origen
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,13 +27,27 @@ FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista.onrender.co
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://ro-lorenzo-nutricionista-back.onrender.com/webhook")
 
 
+RESERVA_MINUTOS = 2
+
+
+def es_pendiente_vigente(turno):
+    if turno["estado"] != "pendiente_de_pago":
+        return False
+    try:
+        fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])  # puede venir con tz o sin tz
+    except Exception:
+        return False
+    ahora = datetime.now(fecha_creacion.tzinfo) if fecha_creacion.tzinfo else datetime.now()
+    return (ahora - fecha_creacion) < timedelta(minutes=RESERVA_MINUTOS)
+
+
 def limpiar_turnos_vencidos(turnos):
     ahora = datetime.now()
     filtrados = []
     for turno in turnos:
         if turno["estado"] == "pendiente_de_pago":
             fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])
-            if ahora - fecha_creacion < timedelta(minutes=1):  # Para pruebas, luego cambiar a hours=12
+            if ahora - fecha_creacion < timedelta(minutes=RESERVA_MINUTOS):
                 filtrados.append(turno)
         else:
             filtrados.append(turno)
@@ -63,6 +77,18 @@ def crear_preferencia(turno: TurnoRequest):
         turnos = []
 
     turnos = limpiar_turnos_vencidos(turnos)
+
+    # Bloquear creación si el horario ya está reservado o confirmado
+    for t in turnos:
+        mismo_horario = (
+            t["modalidad"].lower() == turno.modalidad.lower()
+            and t["fecha"] == turno.fecha
+            and t["hora"] == turno.hora
+        )
+        if not mismo_horario:
+            continue
+        if t["estado"] == "confirmado" or es_pendiente_vigente(t):
+            raise HTTPException(status_code=409, detail="El horario seleccionado ya no está disponible. Por favor elegí otro.")
 
     turno_id = str(uuid.uuid4())
     token_cancelacion = str(uuid.uuid4())
@@ -97,6 +123,10 @@ def crear_preferencia(turno: TurnoRequest):
         "ubicacion": turno.ubicacion,
     })
 
+    # Ventana de expiración de preferencia (2 minutos)
+    ahora_utc = datetime.now(timezone.utc)
+    expira_utc = ahora_utc + timedelta(minutes=RESERVA_MINUTOS)
+
     preference_data = {
         "items": [
             {
@@ -109,7 +139,13 @@ def crear_preferencia(turno: TurnoRequest):
         "external_reference": turno_id,
         "notification_url": WEBHOOK_URL,
         "payment_methods": {
-            "excluded_payment_types": [{"id": "atm"}],  # ⚠️ ticket (efectivo) está PERMITIDO
+            # Permitir solo tarjeta (crédito/débito/prepaga) o billetera Mercado Pago (account_money)
+            # Excluir efectivo/cupones (ticket), transferencia/depósitos (bank_transfer) y cajero (atm)
+            "excluded_payment_types": [
+                {"id": "ticket"},
+                {"id": "bank_transfer"},
+                {"id": "atm"}
+            ],
             "installments": 1
         },
         "back_urls": {
@@ -117,7 +153,11 @@ def crear_preferencia(turno: TurnoRequest):
             "failure": f"{FRONT_URL}/error?id={turno_id}",
             "pending": f"{FRONT_URL}/pending"
         },
-        "auto_return": "approved"
+        "auto_return": "approved",
+        # Expiración del checkout para desalojar inactividad
+        "expires": True,
+        "expiration_date_from": ahora_utc.isoformat().replace("+00:00", "Z"),
+        "expiration_date_to": expira_utc.isoformat().replace("+00:00", "Z")
     }
 
     try:
@@ -176,13 +216,12 @@ def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
     with open("turnos.json", "w", encoding="utf-8") as f:
         json.dump(turnos, f, indent=2, ensure_ascii=False)
 
-    horarios_ocupados = [
-        turno["hora"]
-        for turno in turnos
-        if turno["modalidad"].lower() == modalidad.lower()
-        and turno["fecha"] == fecha
-        and turno["estado"] == "confirmado"
-    ]
+    horarios_ocupados = []
+    for t in turnos:
+        if t["modalidad"].lower() != modalidad.lower() or t["fecha"] != fecha:
+            continue
+        if t["estado"] == "confirmado" or es_pendiente_vigente(t):
+            horarios_ocupados.append(t["hora"])
     return horarios_ocupados
 
 
@@ -220,6 +259,34 @@ def ver_turnos(estado: Optional[str] = Query(None)):
     except Exception as e:
         print(f"[ERROR] No se pudieron leer los turnos: {e}")
         raise HTTPException(status_code=500, detail="No se pudieron leer los turnos")
+
+
+@app.get("/estado-turno")
+def estado_turno(id: str = Query(...)):
+    try:
+        with open("turnos.json", "r", encoding="utf-8") as f:
+            turnos = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        turnos = []
+
+    turnos = limpiar_turnos_vencidos(turnos)
+
+    with open("turnos.json", "w", encoding="utf-8") as f:
+        json.dump(turnos, f, indent=2, ensure_ascii=False)
+
+    for t in turnos:
+        if t["id"] == id:
+            if t["estado"] == "pendiente_de_pago":
+                try:
+                    fecha_creacion = datetime.fromisoformat(t["fecha_creacion"])
+                    ahora = datetime.now(fecha_creacion.tzinfo) if fecha_creacion.tzinfo else datetime.now()
+                    restante = (timedelta(minutes=RESERVA_MINUTOS) - (ahora - fecha_creacion)).total_seconds()
+                    restante = max(0, int(restante))
+                except Exception:
+                    restante = 0
+                return {"estado": t["estado"], "segundos_restantes": restante}
+            return {"estado": t["estado"], "segundos_restantes": 0}
+    raise HTTPException(status_code=404, detail="Turno no encontrado")
 
 if __name__ == "__main__":
     import uvicorn
