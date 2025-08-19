@@ -57,6 +57,7 @@ def limpiar_turnos_vencidos(turnos):
 class TurnoRequest(BaseModel):
     nombre: str
     apellido: str
+    telefono: str
     motivo: str
     modalidad: str
     fecha: str
@@ -98,6 +99,7 @@ def crear_preferencia(turno: TurnoRequest):
         "estado": "pendiente_de_pago",
         "nombre": turno.nombre,
         "apellido": turno.apellido,
+        "telefono": turno.telefono,
         "motivo": turno.motivo,
         "modalidad": turno.modalidad,
         "fecha": turno.fecha,
@@ -116,6 +118,7 @@ def crear_preferencia(turno: TurnoRequest):
     query_string = urllib.parse.urlencode({
         "nombre": turno.nombre,
         "apellido": turno.apellido,
+        "telefono": turno.telefono,
         "motivo": turno.motivo,
         "modalidad": turno.modalidad,
         "fecha": turno.fecha,
