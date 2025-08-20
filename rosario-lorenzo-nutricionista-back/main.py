@@ -23,7 +23,7 @@ app.add_middleware(
 )
 
 sdk = mercadopago.SDK(os.getenv("MP_ACCESS_TOKEN"))
-FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista.onrender.com")
+FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista-4k9y.onrender.com")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://ro-lorenzo-nutricionista-back.onrender.com/webhook")
 
 
