@@ -332,6 +332,10 @@ def estado_turno(id: str = Query(...)):
             return {"estado": t["estado"], "segundos_restantes": restante}
     raise HTTPException(status_code=404, detail="Turno no encontrado")
 
+@app.get("/")
+def root():
+    return {"message": "Servidor funcionando correctamente"}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
