@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import urllib.parse
 from typing import Optional 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -67,6 +70,28 @@ class TurnoRequest(BaseModel):
     ubicacion: str
 
 
+# Function to send email
+def send_email(to_email, subject, body):
+    from_email = "rosariomlorenzo365@gmail.com"
+    password = os.getenv("EMAIL_PASSWORD")
+
+    msg = MIMEMultipart()
+    msg['From'] = from_email
+    msg['To'] = to_email
+    msg['Subject'] = subject
+
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(from_email, password)
+            server.send_message(msg)
+        print("Email sent successfully.")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+
 @app.post("/crear-preferencia")
 def crear_preferencia(turno: TurnoRequest):
     print("\n--- [INFO] Endpoint /crear-preferencia alcanzado. ---")
@@ -114,6 +139,23 @@ def crear_preferencia(turno: TurnoRequest):
     turnos.append(turno_data)
     with open("turnos.json", "w", encoding="utf-8") as f:
         json.dump(turnos, f, indent=2, ensure_ascii=False)
+
+    # Enviar correo con los detalles de la cita
+    email_body = f"""
+    Hola {turno.nombre} {turno.apellido},
+
+    Gracias por agendar tu turno. Aquí están los detalles:
+    - Motivo: {turno.motivo}
+    - Modalidad: {turno.modalidad}
+    - Fecha: {turno.fecha}
+    - Hora: {turno.hora}
+    - Duración: {turno.duracion}
+    - Costo: ${turno.costo}
+    - Ubicación: {turno.ubicacion}
+
+    Por favor, completa el pago para confirmar tu turno.
+    """
+    send_email("licrosariomlorenzo@gmail.com", "Detalles de tu turno", email_body)
 
     query_string = urllib.parse.urlencode({
         "nombre": turno.nombre,
@@ -287,8 +329,7 @@ def estado_turno(id: str = Query(...)):
                     restante = max(0, int(restante))
                 except Exception:
                     restante = 0
-                return {"estado": t["estado"], "segundos_restantes": restante}
-            return {"estado": t["estado"], "segundos_restantes": 0}
+            return {"estado": t["estado"], "segundos_restantes": restante}
     raise HTTPException(status_code=404, detail="Turno no encontrado")
 
 if __name__ == "__main__":
