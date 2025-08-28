@@ -332,7 +332,7 @@ def estado_turno(id: str = Query(...)):
             return {"estado": t["estado"], "segundos_restantes": restante}
     raise HTTPException(status_code=404, detail="Turno no encontrado")
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"message": "Servidor funcionando correctamente"}
 
