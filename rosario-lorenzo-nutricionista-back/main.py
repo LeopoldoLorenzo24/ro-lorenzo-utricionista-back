@@ -17,32 +17,30 @@ load_dotenv()
 
 app = FastAPI()
 
+# 🔧 Configuración de CORS (solo el front en Vercel puede acceder)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://rosario-lorenzo-nutricionista-front.vercel.app"],  # la URL del front
+    allow_origins=["https://ro-lorenzo-nutricionista.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 sdk = mercadopago.SDK(os.getenv("MP_ACCESS_TOKEN"))
-FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista-4k9y.onrender.com")
+FRONT_URL = os.getenv("FRONT_URL", "https://ro-lorenzo-nutricionista.vercel.app")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://ro-lorenzo-nutricionista-back.onrender.com/webhook")
 
-
 RESERVA_MINUTOS = 2
-
 
 def es_pendiente_vigente(turno):
     if turno["estado"] != "pendiente_de_pago":
         return False
     try:
-        fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])  # puede venir con tz o sin tz
+        fecha_creacion = datetime.fromisoformat(turno["fecha_creacion"])
     except Exception:
         return False
     ahora = datetime.now(fecha_creacion.tzinfo) if fecha_creacion.tzinfo else datetime.now()
     return (ahora - fecha_creacion) < timedelta(minutes=RESERVA_MINUTOS)
-
 
 def limpiar_turnos_vencidos(turnos):
     ahora = datetime.now()
@@ -56,7 +54,6 @@ def limpiar_turnos_vencidos(turnos):
             filtrados.append(turno)
     return filtrados
 
-
 class TurnoRequest(BaseModel):
     nombre: str
     apellido: str
@@ -68,7 +65,6 @@ class TurnoRequest(BaseModel):
     duracion: str
     costo: float
     ubicacion: str
-
 
 # Function to send email
 def send_email(to_email, subject, body):
@@ -90,7 +86,6 @@ def send_email(to_email, subject, body):
         print("Email sent successfully.")
     except Exception as e:
         print(f"Failed to send email: {e}")
-
 
 @app.post("/crear-preferencia")
 def crear_preferencia(turno: TurnoRequest):
@@ -168,7 +163,7 @@ def crear_preferencia(turno: TurnoRequest):
         "ubicacion": turno.ubicacion,
     })
 
-    # Ventana de expiración de preferencia (2 minutos)
+    # Ventana de expiración de preferencia
     ahora_utc = datetime.now(timezone.utc)
     expira_utc = ahora_utc + timedelta(minutes=RESERVA_MINUTOS)
 
@@ -184,8 +179,6 @@ def crear_preferencia(turno: TurnoRequest):
         "external_reference": turno_id,
         "notification_url": WEBHOOK_URL,
         "payment_methods": {
-            # Permitir solo tarjeta (crédito/débito/prepaga) o billetera Mercado Pago (account_money)
-            # Excluir efectivo/cupones (ticket), transferencia/depósitos (bank_transfer) y cajero (atm)
             "excluded_payment_types": [
                 {"id": "ticket"},
                 {"id": "bank_transfer"},
@@ -199,7 +192,6 @@ def crear_preferencia(turno: TurnoRequest):
             "pending": f"{FRONT_URL}/pending"
         },
         "auto_return": "approved",
-        # Expiración del checkout para desalojar inactividad
         "expires": True,
         "expiration_date_from": ahora_utc.isoformat().replace("+00:00", "Z"),
         "expiration_date_to": expira_utc.isoformat().replace("+00:00", "Z")
@@ -214,7 +206,6 @@ def crear_preferencia(turno: TurnoRequest):
     except Exception as e:
         print("[ERROR] al crear preferencia:", e)
         raise HTTPException(status_code=500, detail="Error al crear preferencia de pago.")
-
 
 @app.post("/webhook")
 async def recibir_webhook(request: Request):
@@ -247,7 +238,6 @@ async def recibir_webhook(request: Request):
         print(f"[ERROR] en webhook: {e}")
         return {"status": "error"}
 
-
 @app.get("/turnos-ocupados")
 def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
     try:
@@ -269,7 +259,6 @@ def turnos_ocupados(modalidad: str = Query(...), fecha: str = Query(...)):
             horarios_ocupados.append(t["hora"])
     return horarios_ocupados
 
-
 @app.delete("/cancelar-turno")
 def cancelar_turno(id: str):
     try:
@@ -285,15 +274,10 @@ def cancelar_turno(id: str):
 
 @app.get("/ver-turnos")
 def ver_turnos(estado: Optional[str] = Query(None)):
-    """
-    Devuelve todos los turnos.
-    Si se pasa ?estado=confirmado o ?estado=pendiente_de_pago, los filtra.
-    """
     try:
         with open("turnos.json", "r", encoding="utf-8") as f:
             turnos = json.load(f)
 
-        # Aplicar limpieza de vencidos
         turnos = limpiar_turnos_vencidos(turnos)
 
         if estado:
@@ -304,7 +288,6 @@ def ver_turnos(estado: Optional[str] = Query(None)):
     except Exception as e:
         print(f"[ERROR] No se pudieron leer los turnos: {e}")
         raise HTTPException(status_code=500, detail="No se pudieron leer los turnos")
-
 
 @app.get("/estado-turno")
 def estado_turno(id: str = Query(...)):
@@ -338,13 +321,5 @@ def root():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://rosario-lorenzo-nutricionista-front.vercel.app"],  # la URL del front
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
