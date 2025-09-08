@@ -20,7 +20,10 @@ app = FastAPI()
 # 🔧 Configuración de CORS (solo el front en Vercel puede acceder)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://ro-lorenzo-nutricionista.vercel.app"],
+    allow_origins=[
+        "https://ro-lorenzo-nutricionista.vercel.app",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
