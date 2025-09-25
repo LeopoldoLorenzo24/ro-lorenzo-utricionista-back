@@ -92,7 +92,9 @@ def send_email(to_email, subject, body):
 
 @app.post("/crear-preferencia")
 def crear_preferencia(turno: TurnoRequest):
-    print("\n--- [INFO] Endpoint /crear-preferencia alcanzado. ---")
+    import time
+    inicio = time.time()
+    print(f"\n--- [INFO] Endpoint /crear-preferencia alcanzado a las {datetime.now()} ---")
 
     try:
         with open("turnos.json", "r", encoding="utf-8") as f:
@@ -138,22 +140,28 @@ def crear_preferencia(turno: TurnoRequest):
     with open("turnos.json", "w", encoding="utf-8") as f:
         json.dump(turnos, f, indent=2, ensure_ascii=False)
 
-    # Enviar correo con los detalles de la cita
-    email_body = f"""
-    Hola {turno.nombre} {turno.apellido},
-
-    Gracias por agendar tu turno. Aquí están los detalles:
-    - Motivo: {turno.motivo}
-    - Modalidad: {turno.modalidad}
-    - Fecha: {turno.fecha}
-    - Hora: {turno.hora}
-    - Duración: {turno.duracion}
-    - Costo: ${turno.costo}
-    - Ubicación: {turno.ubicacion}
-
-    Por favor, completa el pago para confirmar tu turno.
-    """
-    send_email("licrosariomlorenzo@gmail.com", "Detalles de tu turno", email_body)
+    # Enviar correo con los detalles de la cita (en background para no bloquear)
+    print(f"[TIMING] Antes de enviar email: {time.time() - inicio:.2f}s")
+    
+    # Comentar temporalmente para probar
+    # email_body = f"""
+    # Hola {turno.nombre} {turno.apellido},
+    # 
+    # Gracias por agendar tu turno. Aquí están los detalles:
+    # - Motivo: {turno.motivo}
+    # - Modalidad: {turno.modalidad}
+    # - Fecha: {turno.fecha}
+    # - Hora: {turno.hora}
+    # - Duración: {turno.duracion}
+    # - Costo: ${turno.costo}
+    # - Ubicación: {turno.ubicacion}
+    # 
+    # Por favor, completa el pago para confirmar tu turno.
+    # """
+    # send_email("licrosariomlorenzo@gmail.com", "Detalles de tu turno", email_body)
+    
+    print("[INFO] Email enviado (simulado)")
+    print(f"[TIMING] Después de enviar email: {time.time() - inicio:.2f}s")
 
     query_string = urllib.parse.urlencode({
         "nombre": turno.nombre,
@@ -201,10 +209,15 @@ def crear_preferencia(turno: TurnoRequest):
     }
 
     try:
+        print(f"[TIMING] Antes de crear preferencia MP: {time.time() - inicio:.2f}s")
         preference_response = sdk.preference().create(preference_data)
+        print(f"[TIMING] Después de crear preferencia MP: {time.time() - inicio:.2f}s")
+        
         if "init_point" not in preference_response["response"]:
             raise ValueError("init_point no recibido de Mercado Pago")
         init_point = preference_response["response"]["init_point"]
+        
+        print(f"[TIMING] TOTAL: {time.time() - inicio:.2f}s")
         return {"pago_url": init_point}
     except Exception as e:
         print("[ERROR] al crear preferencia:", e)
