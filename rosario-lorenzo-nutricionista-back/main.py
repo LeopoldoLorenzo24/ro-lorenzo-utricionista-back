@@ -335,6 +335,10 @@ def estado_turno(id: str = Query(...)):
 def root():
     return {"message": "Servidor funcionando correctamente"}
 
+@app.get("/health")
+def health():
+    return {"status": "ok", "message": "Backend funcionando correctamente"}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
