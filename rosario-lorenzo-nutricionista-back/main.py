@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import mercadopago
 import os
 import uuid
@@ -437,7 +438,7 @@ def health(db: Session = Depends(get_db)):
     """Health check endpoint"""
     try:
         # Verificar conexión a la BD
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db_status = "✅ Conectado"
     except Exception as e:
         db_status = f"❌ Error: {str(e)}"
