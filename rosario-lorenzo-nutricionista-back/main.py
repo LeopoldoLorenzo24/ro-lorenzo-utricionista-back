@@ -466,18 +466,18 @@ def debug_email():
         "front_url": os.getenv("FRONT_URL", "NO CONFIGURADO"),
         "webhook_url": os.getenv("WEBHOOK_URL", "NO CONFIGURADO")
     }
-    
-    @app.post("/send-test-email")
-    def send_test_email(to_email: str):
-        """Envía un email de prueba al correo indicado y devuelve resultado detallado."""
-        print(f"[DEBUG] Enviando email de prueba a: {to_email}")
 
-        ok = send_email(to_email, "Prueba de correo - Nutricionista", "Este es un correo de prueba enviado desde el backend.")
+@app.get("/send-test-email")
+def send_test_email(to_email: str = Query(...)):
+    """Envía un email de prueba al correo indicado y devuelve resultado detallado."""
+    print(f"[DEBUG] Enviando email de prueba a: {to_email}")
 
-        if ok:
-            return {"status": "ok", "message": f"Email enviado a {to_email}"}
-        else:
-            raise HTTPException(status_code=500, detail="No se pudo enviar el email. Revisá EMAIL_PASSWORD en variables de entorno y logs.")
+    ok = send_email(to_email, "🧪 Prueba de correo - Nutricionista", "Este es un correo de prueba enviado desde el backend. Si lo recibís, el sistema de emails está funcionando correctamente!")
+
+    if ok:
+        return {"status": "ok", "message": f"Email enviado exitosamente a {to_email}"}
+    else:
+        raise HTTPException(status_code=500, detail="No se pudo enviar el email. Revisá EMAIL_PASSWORD en variables de entorno y logs.")
 
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
