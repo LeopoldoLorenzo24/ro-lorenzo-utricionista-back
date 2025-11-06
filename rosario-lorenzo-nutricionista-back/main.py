@@ -433,6 +433,24 @@ def root():
     """Endpoint raíz"""
     return {"message": "Servidor funcionando correctamente con PostgreSQL"}
 
+@app.get("/debug-db")
+def debug_db():
+    """Debug: Muestra información de la configuración de DB"""
+    import sys
+    db_url = os.getenv("DATABASE_URL", "NO CONFIGURADO")
+    
+    # Ocultar password en la respuesta
+    db_url_safe = db_url.replace(db_url.split(":")[2].split("@")[0] if "@" in db_url else "", "***") if db_url != "NO CONFIGURADO" else db_url
+    
+    return {
+        "database_url_configured": db_url != "NO CONFIGURADO",
+        "database_url": db_url_safe,
+        "python_version": sys.version,
+        "database_module_imported": "database" in sys.modules,
+        "models_module_imported": "models" in sys.modules,
+        "engine_url": str(engine.url) if hasattr(engine, 'url') else "N/A"
+    }
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     """Health check endpoint"""
