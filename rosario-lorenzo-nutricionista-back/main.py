@@ -451,6 +451,34 @@ def debug_db():
         "engine_url": str(engine.url) if hasattr(engine, 'url') else "N/A"
     }
 
+@app.get("/debug-email")
+def debug_email():
+    """Debug: Verifica configuración de EMAIL"""
+    email_password = os.getenv("EMAIL_PASSWORD")
+    mp_token = os.getenv("MP_ACCESS_TOKEN")
+    
+    return {
+        "email_password_configured": email_password is not None and email_password != "",
+        "email_password_length": len(email_password) if email_password else 0,
+        "from_email": "rosariomlorenzo365@gmail.com",
+        "to_email": "licrosariomlorenzo@gmail.com",
+        "mp_access_token_configured": mp_token is not None and mp_token != "",
+        "front_url": os.getenv("FRONT_URL", "NO CONFIGURADO"),
+        "webhook_url": os.getenv("WEBHOOK_URL", "NO CONFIGURADO")
+    }
+    
+    @app.post("/send-test-email")
+    def send_test_email(to_email: str):
+        """Envía un email de prueba al correo indicado y devuelve resultado detallado."""
+        print(f"[DEBUG] Enviando email de prueba a: {to_email}")
+
+        ok = send_email(to_email, "Prueba de correo - Nutricionista", "Este es un correo de prueba enviado desde el backend.")
+
+        if ok:
+            return {"status": "ok", "message": f"Email enviado a {to_email}"}
+        else:
+            raise HTTPException(status_code=500, detail="No se pudo enviar el email. Revisá EMAIL_PASSWORD en variables de entorno y logs.")
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     """Health check endpoint"""
