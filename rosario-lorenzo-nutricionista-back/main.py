@@ -100,7 +100,7 @@ def send_email(to_email: str, subject: str, body: str):
         resend.api_key = api_key
         
         params = {
-            "from": "Lic. Rosario Lorenzo <onboarding@resend.dev>",
+            "from": "Lic. Rosario Lorenzo <licrosariomlorenzo@gmail.com>",
             "to": [to_email],
             "subject": subject,
             "text": body,
@@ -177,6 +177,7 @@ Gracias por agendar tu turno con Lic. Rosario Lorenzo.
 - Duración: {turno.duracion}
 - Costo: ${turno.costo}
 - Ubicación: {turno.ubicacion}
+- Teléfono de contacto: {turno.telefono}
 
 Por favor, completa el pago para confirmar tu turno.
 El enlace de pago expira en {RESERVA_MINUTOS} minutos.
@@ -450,16 +451,16 @@ def debug_db():
 @app.get("/debug-email")
 def debug_email():
     """Debug: Verifica configuración de EMAIL"""
-    email_password = os.getenv("EMAIL_PASSWORD")
+    resend_key = os.getenv("RESEND_API_KEY")
     mp_token = os.getenv("MP_ACCESS_TOKEN")
     
     return {
-        "email_password_configured": email_password is not None and email_password != "",
-        "email_password_length": len(email_password) if email_password else 0,
-        "from_email": "rosariolorenzonutricionista@outlook.com",
+        "resend_api_key_configured": resend_key is not None and resend_key != "",
+        "resend_api_key_length": len(resend_key) if resend_key else 0,
+        "resend_api_key_preview": resend_key[:10] + "..." if resend_key else "N/A",
+        "from_email": "Lic. Rosario Lorenzo <licrosariomlorenzo@gmail.com>",
         "to_email": "licrosariomlorenzo@gmail.com",
-        "smtp_server": "smtp.office365.com",
-        "smtp_port": 587,
+        "service": "Resend API",
         "mp_access_token_configured": mp_token is not None and mp_token != "",
         "front_url": os.getenv("FRONT_URL", "NO CONFIGURADO"),
         "webhook_url": os.getenv("WEBHOOK_URL", "NO CONFIGURADO")
@@ -469,13 +470,45 @@ def debug_email():
 def send_test_email(to_email: str = Query(...)):
     """Envía un email de prueba al correo indicado y devuelve resultado detallado."""
     print(f"[DEBUG] Enviando email de prueba a: {to_email}")
+    
+    # Verificar que la API key esté configurada
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500, 
+            detail="RESEND_API_KEY no está configurada en las variables de entorno"
+        )
+    
+    print(f"[DEBUG] RESEND_API_KEY configurada: {api_key[:10]}...")
 
-    ok = send_email(to_email, "🧪 Prueba de correo - Nutricionista", "Este es un correo de prueba enviado desde el backend. Si lo recibís, el sistema de emails está funcionando correctamente!")
-
-    if ok:
-        return {"status": "ok", "message": f"Email enviado exitosamente a {to_email}"}
-    else:
-        raise HTTPException(status_code=500, detail="No se pudo enviar el email. Revisá EMAIL_PASSWORD en variables de entorno y logs.")
+    try:
+        resend.api_key = api_key
+        
+        params = {
+            "from": "Lic. Rosario Lorenzo <licrosariomlorenzo@gmail.com>",
+            "to": [to_email],
+            "subject": "🧪 Prueba de correo - Nutricionista",
+            "text": "Este es un correo de prueba enviado desde el backend con Resend. Si lo recibís, el sistema de emails está funcionando correctamente!",
+        }
+        
+        print(f"[DEBUG] Enviando email con params: {params}")
+        email_response = resend.Emails.send(params)
+        print(f"[DEBUG] Respuesta de Resend: {email_response}")
+        
+        return {
+            "status": "ok", 
+            "message": f"Email enviado exitosamente a {to_email}",
+            "email_id": email_response.get('id'),
+            "response": email_response
+        }
+    except Exception as e:
+        print(f"[ERROR] Error al enviar email: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error al enviar email: {type(e).__name__}: {str(e)}"
+        )
 
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
