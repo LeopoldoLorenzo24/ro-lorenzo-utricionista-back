@@ -10,9 +10,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import urllib.parse
 from typing import Optional
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 
 # Importar database y models
 from database import engine, get_db, Base
@@ -90,29 +88,26 @@ class TurnoRequest(BaseModel):
 # Function to send email
 def send_email(to_email: str, subject: str, body: str):
     """
-    Envía un email usando Outlook SMTP
+    Envía un email usando Resend API
     """
-    from_email = "rosariolorenzonutricionista@outlook.com"
-    password = os.getenv("EMAIL_PASSWORD")
-
-    if not password:
-        print("[ERROR] EMAIL_PASSWORD no configurado en variables de entorno")
+    api_key = os.getenv("RESEND_API_KEY")
+    
+    if not api_key:
+        print("[ERROR] RESEND_API_KEY no configurado en variables de entorno")
         return False
 
-    msg = MIMEMultipart()
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg['Subject'] = subject
-
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
     try:
-        # Outlook/Hotmail SMTP: smtp.office365.com puerto 587
-        with smtplib.SMTP('smtp.office365.com', 587, timeout=10) as server:
-            server.starttls()
-            server.login(from_email, password)
-            server.send_message(msg)
-        print(f"[INFO] Email enviado exitosamente a {to_email}")
+        resend.api_key = api_key
+        
+        params = {
+            "from": "Lic. Rosario Lorenzo <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": subject,
+            "text": body,
+        }
+        
+        email = resend.Emails.send(params)
+        print(f"[INFO] Email enviado exitosamente a {to_email} - ID: {email.get('id')}")
         return True
     except Exception as e:
         print(f"[ERROR] No se pudo enviar email: {e}")
