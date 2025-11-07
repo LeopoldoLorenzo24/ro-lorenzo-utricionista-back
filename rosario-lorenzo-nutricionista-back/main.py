@@ -108,7 +108,7 @@ def send_email(to_email: str, subject: str, body: str):
 
     try:
         # Outlook/Hotmail SMTP: smtp.office365.com puerto 587
-        with smtplib.SMTP('smtp.office365.com', 587) as server:
+        with smtplib.SMTP('smtp.office365.com', 587, timeout=10) as server:
             server.starttls()
             server.login(from_email, password)
             server.send_message(msg)
