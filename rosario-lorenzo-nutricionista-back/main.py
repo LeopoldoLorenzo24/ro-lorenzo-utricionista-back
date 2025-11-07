@@ -90,9 +90,9 @@ class TurnoRequest(BaseModel):
 # Function to send email
 def send_email(to_email: str, subject: str, body: str):
     """
-    Envía un email usando Gmail SMTP
+    Envía un email usando Outlook SMTP
     """
-    from_email = "rosariomlorenzo365@gmail.com"
+    from_email = "rosariolorenzonutricionista@outlook.com"
     password = os.getenv("EMAIL_PASSWORD")
 
     if not password:
@@ -107,7 +107,8 @@ def send_email(to_email: str, subject: str, body: str):
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
     try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+        # Outlook/Hotmail SMTP: smtp.office365.com puerto 587
+        with smtplib.SMTP('smtp.office365.com', 587) as server:
             server.starttls()
             server.login(from_email, password)
             server.send_message(msg)
@@ -460,8 +461,10 @@ def debug_email():
     return {
         "email_password_configured": email_password is not None and email_password != "",
         "email_password_length": len(email_password) if email_password else 0,
-        "from_email": "rosariomlorenzo365@gmail.com",
+        "from_email": "rosariolorenzonutricionista@outlook.com",
         "to_email": "licrosariomlorenzo@gmail.com",
+        "smtp_server": "smtp.office365.com",
+        "smtp_port": 587,
         "mp_access_token_configured": mp_token is not None and mp_token != "",
         "front_url": os.getenv("FRONT_URL", "NO CONFIGURADO"),
         "webhook_url": os.getenv("WEBHOOK_URL", "NO CONFIGURADO")
